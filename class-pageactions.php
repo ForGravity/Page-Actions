@@ -440,6 +440,11 @@ class Page_Actions extends GFAddOn {
 			return $form;
 		}
 
+		// If current page is invalid, return.
+		if ( ! GFFormDisplay::$submission['is_valid'] ) {
+			return $form;
+		}
+
 		// Get previous page number.
 		$previous_page = GFFormDisplay::get_current_page( $form['id'] ) - 1;
 
