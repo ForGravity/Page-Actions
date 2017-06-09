@@ -3,7 +3,10 @@
 namespace ForGravity\PageActions;
 
 use GFAddOn;
+use GFCommon;
+use GFFormDisplay;
 use GFForms;
+use GFFormsModel;
 
 GFForms::include_addon_framework();
 
@@ -135,8 +138,8 @@ class Page_Actions extends GFAddOn {
 
 		parent::init();
 
-		//add_filter( 'gform_pre_render', array( $this, 'maybe_run_actions' ), 10 );
-		//add_filter( 'gform_submit_button', array( $this, 'maybe_add_hidden_input' ), 10, 2 );
+		add_filter( 'gform_pre_render', array( $this, 'maybe_run_actions' ), 10 );
+		add_filter( 'gform_submit_button', array( $this, 'maybe_add_hidden_input' ), 10, 2 );
 
 	}
 
@@ -168,15 +171,14 @@ class Page_Actions extends GFAddOn {
 		$scripts = array(
 			array(
 				'handle'    => 'forgravity_vendor_vue',
-				'src'       => $this->get_base_url() . '/js/vendor/vue.js',
+				'src'       => $this->get_base_url() . '/js/vendor/vue.min.js',
 				'version'   => $this->_version,
 			),
 			array(
 				'handle'  => 'forgravity_pageactions_form_editor',
 				'deps'    => array( 'jquery', 'forgravity_vendor_vue' ),
 				'src'     => $this->get_base_url() . '/js/form_editor.js',
-				//'version' => $this->_version,
-				'version' => filemtime( $this->get_base_path() . '/js/form_editor.js' ),
+				'version' => $this->_version,
 				'enqueue' => array( array( 'admin_page' => array( 'form_editor' ) ) ),
 				'strings' => array(
 					'dictionary' => $this->get_dictionary_for_form_editor()
@@ -202,8 +204,7 @@ class Page_Actions extends GFAddOn {
 			array(
 				'handle'  => $this->_slug . '_form_editor',
 				'src'     => $this->get_base_url() . '/css/form_editor.css',
-				//'version' => $this->_version,
-				'version' => filemtime( $this->get_base_path() . '/css/form_editor.css' ),
+				'version' => $this->_version,
 				'enqueue' => array( array( 'admin_page' => array( 'form_editor' ) ) ),
 			),
 		);
@@ -411,6 +412,189 @@ class Page_Actions extends GFAddOn {
 
 
 
+	// # FORM RENDER ---------------------------------------------------------------------------------------------------
+
+	/**
+	 * Maybe Run actions for page.
+	 *
+	 * @since  1.0
+	 * @access public
+	 *
+	 * @param array $form Current form object.
+	 *
+	 * @uses GFFormDisplay::get_current_page()
+	 * @uses GFFormsModel::get_page_by_number()
+	 * @uses Page_Actions::get_form_page_count()
+	 * @uses Page_Actions::get_processed_pages()
+	 * @uses Page_Actions::run_actions()
+	 */
+	public function maybe_run_actions( $form ) {
+
+		// If this is not a multi-page form, return.
+		if ( 1 === $this->get_form_page_count( $form ) ) {
+			return $form;
+		}
+
+		// If we are currently on the first page, return.
+		if ( 1 === GFFormDisplay::get_current_page( $form['id'] ) ) {
+			return $form;
+		}
+
+		// Get previous page number.
+		$previous_page = GFFormDisplay::get_current_page( $form['id'] ) - 1;
+
+		// Get processed pages.
+		$processed_pages = $this->get_processed_pages();
+
+		// If previous page was already processed, return.
+		if ( isset( $processed_pages[ $previous_page ] ) ) {
+			return $form;
+		}
+
+		// Get page to process.
+		$page_to_process = GFFormsModel::get_page_by_number( $form, GFFormDisplay::get_current_page( $form['id'] ) );
+
+		// If Page Actions is not setup or not enabled, return.
+		if ( ! isset( $page_to_process->pageActions ) || ( isset( $page_to_process->pageActions ) && ! $page_to_process->pageActions['enabled'] ) ) {
+			return $form;
+		}
+
+		// Run actions.
+		$this->run_actions( $page_to_process, $previous_page, $form );
+
+		return $form;
+
+	}
+
+	/**
+	 * Run actions for page.
+	 *
+	 * @since  1.0
+	 * @access public
+	 *
+	 * @param object $page        Page field object.
+	 * @param int    $page_number Page number being processed.
+	 * @param array  $form        Current form object.
+	 *
+	 * @uses GFCommon::send_notifications()
+	 * @uses GFFeedAddOn::get_feed()
+	 * @uses GFFeedAddOn::is_feed_condition_met()
+	 * @uses GFFeedAddOn::process_feed()
+	 * @uses GFFormsModel::get_current_lead()
+	 * @uses Page_Actions::get_addon_by_slug()
+	 * @uses Page_Actions::get_processed_pages()
+	 */
+	public function run_actions( $page, $page_number, $form ) {
+
+		// Get processed pages.
+		$processed_pages = $this->get_processed_pages();
+
+		// Get current entry.
+		$entry = GFFormsModel::get_current_lead();
+
+		// Loop through objects groups.
+		foreach ( $page->pageActions['objects'] as $object_group ) {
+
+			// If object group type is not defined, skip.
+			if ( 0 === $object_group['type'] ) {
+				continue;
+			}
+
+			// Remove empty object IDs.
+			$object_group['id'] = array_filter( $object_group['id'] );
+
+			// If no object IDs are defined, skip.
+			if ( empty( $object_group['id'] ) ) {
+				continue;
+			}
+
+			// Run actions based on object type
+			switch ( $object_group['type'] ) {
+
+				case 'notification':
+
+					// Send notifications.
+					GFCommon::send_notifications( $object_group['id'], $form, $entry );
+
+					// Add notification IDs to procesed pages.
+					$processed_pages[ $page_number ][ $object_group['type'] ] = $object_group['id'];
+
+					break;
+
+				default:
+
+					// Get Feed Add-On.
+					$addon = $this->get_addon_by_slug( $object_group['type'] );
+
+					// If Add-On does not exist, skip.
+					if ( ! is_object( $addon ) ) {
+						continue;
+					}
+
+					// Loop through feed IDs.
+					foreach ( $object_group['id'] as $feed_id ) {
+
+						// Get feed object.
+						$feed = $addon->get_feed( $feed_id );
+
+						// If feed condition is met, process feed.
+						if ( $addon->is_feed_condition_met( $feed, $form, $entry ) ) {
+
+							// Process feed.
+							$addon->process_feed( $feed, $entry, $form );
+
+							// Add object ID to procesed pages.
+							$processed_pages[ $page_number ][ $object_group['type'] ][] = $feed_id;
+
+						}
+
+					}
+
+					break;
+
+			}
+
+		}
+
+		// Set processed pages.
+		$this->set_processed_pages( $processed_pages );
+
+	}
+
+	/**
+	 * Add hidden input containing processed page actions.
+	 *
+	 * @since  1.0
+	 * @access public
+	 *
+	 * @param string $button_input The string containing the <input> tag to be filtered.
+	 * @param array  $form         The form currently being processed.
+	 *
+	 * @uses Page_Actions::get_form_page_count()
+	 * @uses Page_Actions::get_processed_pages()
+	 *
+	 * @return string
+	 */
+	public function maybe_add_hidden_input( $button_input, $form ) {
+
+		// If this is not a multi-page form, return.
+		if ( 1 === $this->get_form_page_count( $form ) ) {
+			return $button_input;
+		}
+
+		// Add input.
+		$button_input .= sprintf(
+			"<input type='hidden' name='fg_pageactions_processed' value='%s' />",
+			json_encode( $this->get_processed_pages() )
+		);
+
+		return $button_input;
+
+	}
+
+
+
+
 	// # HELPER METHODS ------------------------------------------------------------------------------------------------
 
 	/**
@@ -435,21 +619,16 @@ class Page_Actions extends GFAddOn {
 		// Loop through registered Add-Ons.
 		foreach ( GFAddOn::get_registered_addons() as $addon ) {
 
-			// If get_slug method does not exist, skip.
-			if ( ! method_exists( $addon, 'get_slug' ) ) {
-				continue;
-			}
-
-			// Get Add-On slug.
-			$addon_slug = call_user_func( array( $addon, 'get_slug' ) );
-
-			// If the Add-On slug does not match the Add-On we are looking for, skip it.
-			if ( $addon_slug !== $slug ) {
-				continue;
-			}
-
 			// If get_instance method does not exist, skip.
 			if ( ! method_exists( $addon, 'get_instance' ) ) {
+				continue;
+			}
+
+			// Get Add-On instance.
+			$addon = call_user_func( array( $addon, 'get_instance' ) );
+
+			// If the Add-On slug does not match the Add-On we are looking for, skip it.
+			if ( $addon->get_slug() !== $slug ) {
 				continue;
 			}
 
@@ -479,6 +658,51 @@ class Page_Actions extends GFAddOn {
 		$page_fields = GFCommon::get_fields_by_type( $form, array( 'page' ) );
 
 		return count( $page_fields ) + 1;
+
+	}
+
+	/**
+	 * Get pages processed by Page Actions.
+	 *
+	 * @since  1.0
+	 * @access public
+	 *
+	 * @uses GFAddOn::is_json()
+	 * @uses Page_Actions::set_processed_pages()
+	 *
+	 * @return array
+	 */
+	public function get_processed_pages() {
+
+		// If processed pages are set, return.
+		if ( isset( $this->processed_pages ) ) {
+			return $this->processed_pages;
+		}
+
+		// Get processed pages.
+		$processed = rgpost( 'fg_pageactions_processed' );
+
+		// Convert to array.
+		$processed = $this->is_json( $processed ) ? json_decode( $processed, ARRAY_A ) : array();
+
+		// Set processed pages.
+		$this->set_processed_pages( $processed );
+
+		return $this->processed_pages;
+
+	}
+
+	/**
+	 * Set pages processed by Page Actions.
+	 *
+	 * @since  1.0
+	 * @access public
+	 *
+	 * @param array $processed Processed pages.
+	 */
+	public function set_processed_pages( $processed = array() ) {
+
+		$this->processed_pages = $processed;
 
 	}
 
