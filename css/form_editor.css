@@ -1,0 +1,37 @@
+.pageActions_setting .add_field_choice,
+.pageActions_setting .delete_field_choice {
+	
+	vertical-align: middle;
+	
+}
+
+.pageActions_setting .objectGroups {
+	
+	margin-top: 5px;
+	
+}
+
+.pageActions_setting .objectGroup > select {
+	
+	width: 250px;
+	
+}
+
+.pageActions_setting .ids {
+	
+	padding: 2px 0 2px 20px;
+	
+}
+
+.pageActions_setting .ids .id {
+	
+	margin-bottom: 0;
+	padding: 0 !important;
+	
+}
+
+.pageActions_setting .ids .id > select {
+	
+	width: 229px;
+	
+}
